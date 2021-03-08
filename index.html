@@ -2,9 +2,12 @@
     <head>
         <meta charset="utf-8">
         <style>
+            html, body {
+                font-family: Helvetica, Arial, Sans-Serif;
+            }
             body {
                 width: 500px;
-                margin: auto;
+                margin: 40px auto 40px auto;
                 display: flex;
                 flex-direction: column;
             }
@@ -12,9 +15,20 @@
                 display: flex;
                 flex-direction: column;
             }
+            #table {
+                margin: 40px 0 0 0;
+                display: grid;
+                grid-template-columns: auto auto auto;
+            }
             label {
                 margin: 30px 0 0 0;
                 font-weight: 600;
+            }
+            h3 {
+                margin: 20px 0 0 0;
+            }
+            .align-right {
+                text-align: "right";
             }
         </style>
     </head>
@@ -23,46 +37,48 @@
 <script>
 
 let g_json = null;
-let g_number_of_most_expensive_hours = 5;
-let g_number_of_cheapest_hours = 5;
+let g_number_of_most_expensive_hours = 4;
+let g_number_of_cheapest_hours = 4;
 
 /**
  * render() - Render the entire HTML page based on arguments.
  */ 
-function render(element, json, number_of_max_hours = 5, number_of_min_hours = 5, number_of_history_days = 365) {
+function render(element, json, number_of_max_hours, number_of_min_hours, number_of_history_days = 365) {
     const headerText = `\
-<h2>Tibber + Battery calculator</h2>
+<h2>Tibber + Battery savings calculator</h2>
 <p>This calculator tries to answer two questions:</p>
 <p><b>Question 1:</b> Based on my Tibber consumption history, how much would a battery save me, if the battery was able to shift consumption away from the most expensive hours of the day, to the cheapest hours of the day?</p>
 <p><b>Question 2:</b>How big would the battery need to be?</p>
 `;
 
-    const tibberAPIkeyText = `\
-<label>Tibber API key:</label>
+    const tibberAccessTokenText = `\
+<label>Tibber API access token:</label>
 <input type="text" id="input-api-key" min="43" max="43" placeholder="Example: aifKjrB3JIhDquiiR5q5L7PdMGbRY_kUKrCzfyYoWPQ"><br><br>
 <p><i>To get your API key see: <a href="https://developer.tibber.com/settings/accesstoken">https://developer.tibber.com/settings/accesstoken</a></i></p>
 <p><i>Data notice: Data fetched from Tibber API is only stored locally inside this browser tab, and is deleted once this tab is closed. All communication happens directly between this tab and the Tibber API - there is no proxy in between.</i></p>
 `;
 
     if (!json) {
-        element.innerHTML = headerText + tibberAPIkeyText;
+        element.innerHTML = headerText + tibberAccessTokenText;
 
         element.querySelector("#input-api-key")
             .addEventListener("change", async e => {
                 const api_token = e.target.value
                 g_json = await get_json(api_token);
 
-                render(document.body, g_json);
+                render(document.body, g_json, g_number_of_most_expensive_hours, g_number_of_cheapest_hours);
             });
 
         return;
     }        
-        
     //
     // 1. Group data per day
     //
     const days = new Map();
     const [home] = json.data.viewer.homes;
+    const name = json.data.viewer.name;
+    const address = home.appNickname;
+
     for (const hour of home.consumption.edges) {
         
         const { node: { from: f, to: t }} = hour;
@@ -109,37 +125,49 @@ function render(element, json, number_of_max_hours = 5, number_of_min_hours = 5,
     // - Take consumption of each MAX hours and spread evenly across the MIN hours for each day.
     // - Sum up the savings for each day, to get the total savings.
     //
-    const total_savings = minMax.reduce((sum, {min, max}) => {
+    const savings = minMax.map(({min, max}) => {
 
-        const max_consumption_kwh = max.reduce((sum, it) => sum + it.consumption, 0);
+        const max_capacity = max.reduce((sum, it) => sum + it.consumption, 0);
         
-        const max_consumption_per_min_hour = max_consumption_kwh / min.length;
+        const max_consumption_per_min_hour = max_capacity / min.length;
 
         const cost_max_hours = max.reduce((sum, it) => sum + ((it.unitPrice + it.unitPriceVAT) * it.consumption), 0);
         const cost_min_hours = min.reduce((sum, it) => sum + ((it.unitPrice + it.unitPriceVAT) * max_consumption_per_min_hour), 0);
         const savings = cost_max_hours - cost_min_hours;
 
-        console.log({from: max[0].from.split("T")[0], number_of_max_hours, number_of_min_hours, cost_max_hours, cost_min_hours, savings, max_consumption_kwh})
-
-        return sum + savings;
+        return { min, max, savings, max_capacity };
     }, 0);
 
-    const capacity_required = minMax.reduce((capacity, {max}) => {
-        const maybe_capacity = max.reduce((sum, it) => sum + it.consumption, 0);
-        return capacity < maybe_capacity ? maybe_capacity : capacity;  
+    const total_savings = savings.reduce((sum, {savings}) => sum + savings, 0);
+
+    const capacity_required = savings.reduce((capacity, { max_capacity }) => {
+        return capacity < max_capacity ? max_capacity : capacity;  
     }, -Infinity)
 
+    const tableText = [
+        `<span><b>Day</b></span><span class="align-right"><b>Savings</b></span><span class="align-right"><b>Capacity required</b></span>`,
+        ...savings.map(({ min, max, savings, max_capacity }) => {
+        const [hour] = max
+        return `<span>${hour.from.split("T")[0]}</span><span class="align-right">${savings.toFixed(2)} NOK</span><span class="align-right">${max_capacity.toFixed(2)} KWh</span>`;
+    })].join("\n");
+
     element.innerHTML = headerText + `\
+<h2>Hello ${name}, living at ${address}! 😎</h2>
+
 <label>Most expensive hours (discharging hours):</label><br>
 <input id="input-most-expensive" type="number" min="1" max="12" value="${number_of_max_hours}"><br>
-<p><i>Explanation: "I want to discharge my battery during the </i><b>5</b><i> most expensive hours of the day."</i></p>
+<p><i>Explanation: "I want to discharge my battery during the </i><b>${number_of_max_hours}</b><i> most expensive hours of the day."</i></p>
 
 <label>Cheapest hours (charging hours):</label><br>
 <input id="input-cheapest" type="number" min="1" max="12" value="${number_of_min_hours}"><br>
-<p><i>Explanation: "I want to charge my battery during the <b>5</b> cheapest hours of the day."</i> </p>
+<p><i>Explanation: "I want to charge my battery during the <b>${number_of_min_hours}</b> cheapest hours of the day."</i> </p>
 
-<h3>Potential savings last year: ${total_savings.toFixed(2)} NOK</h3>
-<h3>Battery capacity required: ${capacity_required.toFixed(2)} KWh (worst case)</h3>
+<h3>Potential savings last year: ${total_savings.toFixed(2)} NOK 💰</h3>
+<h3>Battery capacity required: ${capacity_required.toFixed(2)} KWh 🔋</h3>
+
+<section id="table">
+    ${tableText}
+</section>
 `;
 
     element.querySelector("#input-most-expensive").addEventListener('change', e => {
